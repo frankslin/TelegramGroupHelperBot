@@ -34,6 +34,8 @@ from bot.config import (
     USE_VERTEX_IMAGE,
     VERTEX_IMAGE_MODEL,
     PORTRAIT_SYSTEM_PROMPT,
+    CWD_PW_API_KEY,
+    UPLOAD_SERVICE,
 )
 from bot.db.database import ( # Reformatted for clarity
     queue_message_insert, 
@@ -47,6 +49,7 @@ from bot.llm import (
     download_media, 
     generate_video_with_veo
 )
+from bot.cwd_uploader import upload_to_cwd_pw_paste
 from io import BytesIO
 
 # Configure logging
@@ -210,14 +213,16 @@ async def create_telegraph_page(title: str, content: str) -> Optional[str]:
         return None
 
 
-async def send_response(message, response, title="Response", parse_mode=ParseMode.MARKDOWN):
-    """Send a response, creating a Telegraph page if it's too long.
+async def send_response(message, response, title="Response", parse_mode=ParseMode.MARKDOWN, user_prompt="", debug_info=""):
+    """Send a response, creating a page if it's too long.
     
     Args:
         message: The message to edit with the response.
         response: The response text to send.
-        title: The title for the Telegraph page if created.
+        title: The title for the page if created.
         parse_mode: The parse mode to use for Telegram messages.
+        user_prompt: Optional user prompt for cwd.pw upload.
+        debug_info: Optional debug info for cwd.pw upload.
         
     Returns:
         None
@@ -227,11 +232,23 @@ async def send_response(message, response, title="Response", parse_mode=ParseMod
     
     # Check if message exceeds line count threshold or character limit
     if line_count > 22 or len(response) > TELEGRAM_MAX_LENGTH:
-        logger.info(f"Response length {len(response)} exceeds threshold {TELEGRAM_MAX_LENGTH}, creating Telegraph page")
-        telegraph_url = await create_telegraph_page(title, response)
-        if telegraph_url:
+        logger.info(f"Response length {len(response)} exceeds threshold {TELEGRAM_MAX_LENGTH}, uploading to {UPLOAD_SERVICE}")
+        
+        upload_url = None
+        if UPLOAD_SERVICE.lower() == "cwd.pw":
+            upload_url = await upload_to_cwd_pw_paste(
+                title=title,
+                content=response,
+                user_prompt=user_prompt,
+                debug_info=debug_info,
+                raw_response=response
+            )
+        else:  # Default to telegra.ph
+            upload_url = await create_telegraph_page(title, response)
+        
+        if upload_url:
             await message.edit_text(
-                f"I have too much to say. Please view it here: {telegraph_url}"
+                f"I have too much to say. Please view it here: {upload_url}"
             )
         else:
             # Fallback: try to send as plain text
@@ -257,10 +274,21 @@ async def send_response(message, response, title="Response", parse_mode=ParseMod
             except BadRequest as plain_e:
                 if "Message_too_long" in str(plain_e):
                     # Handle the case where the message is unexpectedly too long
-                    telegraph_url = await create_telegraph_page(title, response)
-                    if telegraph_url:
+                    upload_url = None
+                    if UPLOAD_SERVICE.lower() == "cwd.pw":
+                        upload_url = await upload_to_cwd_pw_paste(
+                            title=title,
+                            content=response,
+                            user_prompt=user_prompt,
+                            debug_info=debug_info,
+                            raw_response=response
+                        )
+                    else:  # Default to telegra.ph
+                        upload_url = await create_telegraph_page(title, response)
+                    
+                    if upload_url:
                         await message.edit_text(
-                            f"The response is too long for Telegram. View it here: {telegraph_url}"
+                            f"The response is too long for Telegram. View it here: {upload_url}"
                         )
                     else:
                         # Last resort: truncate
@@ -392,7 +420,8 @@ async def tldr_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         
         if response:
-            await send_response(processing_message, response, "Message Summary", ParseMode.MARKDOWN)
+            await send_response(processing_message, response, "Message Summary", ParseMode.MARKDOWN, 
+                              user_prompt=f"Summarize {count} recent messages")
         else:
             await processing_message.edit_text(
                 "Failed to generate a summary. Please try again later."
@@ -588,7 +617,8 @@ async def factcheck_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         # Final update with complete response
         if full_response:
-            await send_response(processing_message, full_response, "Fact Check Results", ParseMode.MARKDOWN)
+            await send_response(processing_message, full_response, "Fact Check Results", ParseMode.MARKDOWN,
+                              user_prompt=f"Fact-check: {message_to_check[:100]}..." if len(message_to_check) > 100 else message_to_check)
         else:
             await processing_message.edit_text(
                 "Failed to fact-check the message. Please try again later."
@@ -761,7 +791,8 @@ async def q_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         
         if response:
-            await send_response(processing_message, response, "Answer to Your Question", ParseMode.MARKDOWN)
+            await send_response(processing_message, response, "Answer to Your Question", ParseMode.MARKDOWN,
+                              user_prompt=f"Question: {query[:100]}..." if len(query) > 100 else query)
         else:
             await processing_message.edit_text(
                 "I couldn't find an answer to your question. Please try rephrasing or asking something else."
@@ -1339,7 +1370,8 @@ async def profileme_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
 
         if profile_response:
-            await send_response(processing_message, profile_response, "Your User Profile")
+            await send_response(processing_message, profile_response, "Your User Profile",
+                              user_prompt=f"Generate user profile{' with style: ' + custom_prompt if custom_prompt else ''}")
         else:
             await processing_message.edit_text(
                 "I couldn't generate a profile at this time. Please try again later."

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 import aiohttp
 import pytest
 
-from bot.cwd_uploader import upload_base64_image_to_cwd, upload_image_bytes_to_cwd
+from bot.cwd_uploader import upload_base64_image_to_cwd, upload_image_bytes_to_cwd, upload_to_cwd_pw_paste
 
 
 class TestCwdUploader(unittest.IsolatedAsyncioTestCase):
@@ -366,6 +366,215 @@ class TestCwdUploader(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('true', request_data_str)
                 # Ensure it's not false or any other value
                 self.assertNotIn('false', request_data_str.lower())
+
+
+class TestCwdPasteUploader(unittest.IsolatedAsyncioTestCase):
+    """Test cases for CWD.PW paste uploader functions."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        self.test_title = "Test AI Response"
+        self.test_content = "This is a test response from the AI assistant."
+        self.test_user_prompt = "What is the meaning of life?"
+        self.test_debug_info = "Debug: Model temperature 0.7"
+        self.test_raw_response = "Raw response from AI"
+
+    @patch('bot.cwd_uploader.CWD_PW_API_KEY', 'test_api_key_123')
+    async def test_upload_to_cwd_pw_paste_success_301(self):
+        """Test successful upload with 301 redirect response."""
+        mock_response = MagicMock()
+        mock_response.status = 301
+        mock_response.headers = {'Location': 'https://cwd.pw/p/test123'}
+        
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            
+            result = await upload_to_cwd_pw_paste(
+                title=self.test_title,
+                content=self.test_content,
+                user_prompt=self.test_user_prompt,
+                debug_info=self.test_debug_info,
+                raw_response=self.test_raw_response
+            )
+            
+            self.assertEqual(result, 'https://cwd.pw/p/test123')
+            mock_session.post.assert_called_once()
+            
+            # Check the call arguments
+            call_args = mock_session.post.call_args
+            self.assertEqual(call_args[0][0], 'https://cwd.pw/api/paste')
+            self.assertEqual(call_args[1]['headers']['X-API-Key'], 'test_api_key_123')
+            self.assertEqual(call_args[1]['headers']['Content-Type'], 'application/json')
+            
+            # Check JSON payload
+            json_payload = call_args[1]['json']
+            self.assertEqual(json_payload['title'], self.test_title)
+            self.assertEqual(json_payload['content'], self.test_content)
+            self.assertEqual(json_payload['userPrompt'], self.test_user_prompt)
+            self.assertEqual(json_payload['debugInfo'], self.test_debug_info)
+            self.assertEqual(json_payload['rawResponse'], self.test_raw_response)
+            self.assertIn('metadata', json_payload)
+            self.assertEqual(json_payload['metadata']['source'], 'https://github.com/frankslin/TelegramGroupHelperBot')
+
+    async def test_upload_to_cwd_pw_paste_success_302(self):
+        """Test successful upload with 302 redirect response."""
+        mock_response = MagicMock()
+        mock_response.status = 302
+        mock_response.headers = {'Location': 'https://cwd.pw/p/test456'}
+        
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            
+            result = await upload_to_cwd_pw_paste(
+                title=self.test_title,
+                content=self.test_content
+            )
+            
+            self.assertEqual(result, 'https://cwd.pw/p/test456')
+
+    async def test_upload_to_cwd_pw_paste_minimal_params(self):
+        """Test upload with only required parameters."""
+        mock_response = MagicMock()
+        mock_response.status = 301
+        mock_response.headers = {'Location': 'https://cwd.pw/p/minimal'}
+        
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            
+            result = await upload_to_cwd_pw_paste(
+                title=self.test_title,
+                content=self.test_content
+            )
+            
+            self.assertEqual(result, 'https://cwd.pw/p/minimal')
+            
+            # Check that optional parameters are empty strings
+            call_args = mock_session.post.call_args
+            json_data = call_args[1]['json']
+            self.assertEqual(json_data['userPrompt'], '')
+            self.assertEqual(json_data['debugInfo'], '')
+            self.assertEqual(json_data['rawResponse'], '')
+
+    async def test_upload_to_cwd_pw_paste_no_location_header(self):
+        """Test upload with redirect status but no Location header."""
+        mock_response = MagicMock()
+        mock_response.status = 301
+        mock_response.headers = {}
+        
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            
+            result = await upload_to_cwd_pw_paste(
+                title=self.test_title,
+                content=self.test_content
+            )
+            
+            self.assertIsNone(result)
+
+    async def test_upload_to_cwd_pw_paste_http_error(self):
+        """Test upload with HTTP error response."""
+        mock_response = MagicMock()
+        mock_response.status = 400
+        mock_response.text = AsyncMock(return_value="Bad Request")
+        
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            
+            result = await upload_to_cwd_pw_paste(
+                title=self.test_title,
+                content=self.test_content
+            )
+            
+            self.assertIsNone(result)
+
+    async def test_upload_to_cwd_pw_paste_timeout_error(self):
+        """Test upload with timeout exception."""
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session.post.side_effect = aiohttp.ServerTimeoutError()
+            
+            result = await upload_to_cwd_pw_paste(
+                title=self.test_title,
+                content=self.test_content
+            )
+            
+            self.assertIsNone(result)
+
+    async def test_upload_to_cwd_pw_paste_connection_error(self):
+        """Test upload with connection exception."""
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            # Use a simpler exception that's easier to mock
+            mock_session.post.side_effect = aiohttp.ClientError("Connection failed")
+            
+            result = await upload_to_cwd_pw_paste(
+                title=self.test_title,
+                content=self.test_content
+            )
+            
+            self.assertIsNone(result)
+
+    @patch('bot.cwd_uploader.CWD_PW_API_KEY', 'mocked_api_key')
+    async def test_upload_to_cwd_pw_paste_api_key_usage(self):
+        """Test that the correct API key is used in headers."""
+        mock_response = MagicMock()
+        mock_response.status = 301
+        mock_response.headers = {'Location': 'https://cwd.pw/p/test789'}
+        
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            
+            result = await upload_to_cwd_pw_paste(
+                title=self.test_title,
+                content=self.test_content
+            )
+            
+            self.assertEqual(result, 'https://cwd.pw/p/test789')
+            
+            # Verify the API key is correctly used in headers
+            call_args = mock_session.post.call_args
+            headers = call_args[1]['headers']
+            self.assertEqual(headers['X-API-Key'], 'mocked_api_key')
+
+    async def test_upload_to_cwd_pw_paste_unicode_content(self):
+        """Test upload with Unicode characters."""
+        unicode_content = "测试内容：AI生成的文本 🤖 with émojis and spéciál chàracters"
+        mock_response = MagicMock()
+        mock_response.status = 301
+        mock_response.headers = {'Location': 'https://cwd.pw/p/unicode_test'}
+        
+        with patch('aiohttp.ClientSession') as mock_session_class:
+            mock_session = MagicMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            
+            result = await upload_to_cwd_pw_paste(
+                title="Unicode Test",
+                content=unicode_content,
+                user_prompt="测试提示"
+            )
+            
+            self.assertEqual(result, 'https://cwd.pw/p/unicode_test')
+            
+            # Verify Unicode content is preserved
+            call_args = mock_session.post.call_args
+            json_data = call_args[1]['json']
+            self.assertEqual(json_data['content'], unicode_content)
+            self.assertEqual(json_data['userPrompt'], "测试提示")
 
 
 if __name__ == '__main__':

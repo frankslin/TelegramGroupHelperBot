@@ -6,6 +6,8 @@ import secrets
 import aiohttp
 from typing import Optional
 
+from bot.config import CWD_PW_API_KEY
+
 logger = logging.getLogger(__name__)
 
 
@@ -185,4 +187,60 @@ async def upload_image_bytes_to_cwd(image_bytes: bytes, api_key: str, mime_type:
         
     except Exception as e:
         logger.error(f"Error converting image bytes to base64 for cwd.pw upload: {e}", exc_info=True)
+        return None
+
+
+async def upload_to_cwd_pw_paste(title: str, content: str, user_prompt: str = '', debug_info: str = '', raw_response: str = '') -> Optional[str]:
+    """Upload AI generated content to cwd.pw pastebin service.
+    
+    Args:
+        title: The title of the paste.
+        content: The content to upload.
+        user_prompt: Optional user prompt that generated this content.
+        debug_info: Optional debug information.
+        raw_response: Optional raw response from AI.
+        
+    Returns:
+        The URL of the created paste, or None if creation failed.
+    """
+    try:
+        logger.info(f'Uploading to cwd.pw pastebin, content length: {len(content)}')
+        metadata = {
+            'source': 'https://github.com/frankslin/TelegramGroupHelperBot',
+        }
+        
+        payload = {
+            'title': title,
+            'content': content,
+            'userPrompt': user_prompt,
+            'debugInfo': debug_info,
+            'rawResponse': raw_response,
+            'metadata': metadata,
+        }
+        
+        headers = {
+            'X-API-Key': CWD_PW_API_KEY,
+            'Content-Type': 'application/json',
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                'https://cwd.pw/api/paste',
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                
+                if response.status in [301, 302]:
+                    location = response.headers.get('Location')
+                    if location:
+                        logger.info(f'cwd.pw paste created: {location}')
+                        return location
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to create cwd.pw paste: HTTP {response.status}, {error_text}")
+                    return None
+            
+    except Exception as e:
+        logger.error(f"Error uploading to cwd.pw pastebin: {e}", exc_info=True)
         return None
